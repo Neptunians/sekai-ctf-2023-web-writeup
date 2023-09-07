@@ -474,19 +474,19 @@ It would be something like that ("simplified" version):
 
 - **Strings - Part 2**
 
-Now we don't have all ASCII table, but we have enough alphabet to use `java.lang.Character.toString(int char)`. We can call the constructors by index just like we did before with method indexes.
+Now we don't have all ASCII table, but we have enough alphabet to use `java.lang.Character.toString(int char)`.
 
 That would be something like that to get ASC `A`:
 
 `Class.forName("java.lang.Character").getMethods()[5].invoke(null, 65)`
 
-Now we can write a [complete string generator](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/61cea40d2db6b2ac14a2652e0b559e7e24225c23/web-frog-waf/2-exploit.py#L116), with any char, bypassing WAF restrictions.
+We can write a [complete string generator](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/61cea40d2db6b2ac14a2652e0b559e7e24225c23/web-frog-waf/2-exploit.py#L116), with any char, bypassing WAF restrictions.
 
 Now we can instantiate any class and call any methods, with any strings and numbers as parameters.
 
 ### Running commands
 
-Now we can compose the components to use `java.lang.Runtime` to RCE. The plan is to use something like that below.
+We can compose the components to use `java.lang.Runtime` to RCE. The plan is to use something like that below.
 
 ```java
 ${message.getClass().forName("java.lang.Runtime").getRuntime().exec("ls")}
@@ -540,12 +540,13 @@ Fun for the whole CTF Family!
 ### Takeaways
 
 The solution could be probably simpler on the Java side.
-For reading the process output, I could maybe use simpler solutions or maybe read all of the output.
+For reading the process output, I could maybe read all of the output in one function, without all of the Java usual bullshiting.
 
-Java has some cool modern stuff, but I know Java from darker times.
+I heard later that Runtime class has some issues with special characters we need for bash. I don't know details yet, but that explains why we couldn't just get the flag in a simpler way.
+
+Java has some cool modern stuff, but I only know it from darker times.
 
 Also the final payload got huge! (120k chars)
-
 I saw a much smaller one (24k chars) on Discord.
 
 Just saw the [official solution](https://github.com/project-sekai-ctf/sekaictf-2023/blob/main/web/frog-waf/solution/solve.py) and I think we got somewhat close :) Their solution for numbers was MUCH better.
@@ -553,6 +554,8 @@ Just saw the [official solution](https://github.com/project-sekai-ctf/sekaictf-2
 ## Challenge: Chunky (16 solves)
 
 ![](https://i.imgur.com/yWbxMYQ.png)
+
+The [source-code of the challenge](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/tree/main/web-chunky/dist) is also available here, so you can follow it locally.
 
 ### First-Look
 
@@ -690,7 +693,7 @@ Some things to note here:
 
 ### Request Smugling
 
-After many years of guys like you hacking stuff, modern HTTP servers have many security protections, but you can't expect that from small custom projects.
+After many years of guys like you hacking stuff, modern HTTP servers have many security protections, but you can't expect that from small custom projects. That is the cause for our cache server.
 
 When you have multiple web servers working in a chained fashion, we can try a [Request Smuggling](https://portswigger.net/web-security/request-smuggling) approach.
 
@@ -700,7 +703,9 @@ I wont explain that in details because it will never get better than guys at [Po
 
 If you want to learn even more, I suggest reading the [excellent Request Smuggling research articles](https://portswigger.net/research/request-smuggling) from PortSwigger research, mostly by the master-hacker-defcon-talker [James Kettle](https://portswigger.net/research/james-kettle) a.k.a. [albinowax](https://twitter.com/albinowax).
 
-To summarize: the custom cache uses the `Content-Length` header to know the size of the post. [Current HTTP specification](https://datatracker.ietf.org/doc/html/rfc9112#name-transfer-encoding:~:text=A%20server%20MAY%20reject%20a%20request%20that%20contains%20both%20Content%2DLength%20and%20Transfer%2DEncoding%20or%20process%20such%20a%20request%20in%20accordance%20with%20the%20Transfer%2DEncoding%20alone) says that `Transfer-Encoding` is prioritized over `Content-Length`, but our custom cache just ignored that.
+To summarize: the custom cache uses the `Content-Length` header to know the size of the post. [The HTTP specification](https://datatracker.ietf.org/doc/html/rfc9112#name-transfer-encoding:~:text=A%20server%20MAY%20reject%20a%20request%20that%20contains%20both%20Content%2DLength%20and%20Transfer%2DEncoding%20or%20process%20such%20a%20request%20in%20accordance%20with%20the%20Transfer%2DEncoding%20alone) says that `Transfer-Encoding` is prioritized over `Content-Length`, but our custom cache just ignored that.
+
+(And now we know why the name of the challenge is `Chunky`)
 
 Nice, we can smuggle requests...
 
@@ -724,7 +729,7 @@ OK, let's try it prettier.
 
 Since this concept may be hard to follow, let's follow the flow on the numbers.
 If you look as vertices 4 and 9, we have our first desync: cache sends 1 request, but nginx understands that as 2.
-That will result, later, in the vertice 16, where the answer to `/post/C` will be the response of `/post/B` that is waiting to be written to the socket from nginx.
+That will result, later, in the vertex 16, where the answer to `/post/C` will be the response of `/post/B` that is waiting to be written to the socket from nginx.
 
 That means, future GETs to post C will get the content of B.
 
@@ -752,7 +757,7 @@ We generated the key-pair [local_key3](https://github.com/Neptunians/sekai-ctf-2
 3 files that compose the templates of the requests that we will send, as in the Diagram:
 - [`desync1.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `POST A`
     - Note that it have both the `Content-Length` and `Transfer-Encoding` headers, that will cause our desync.
-- [`desync2.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `GET JWKS`
+- [`desync2.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `GET /post/<user_uuid>/<post_uuid_of_poisoned_jwks>`
     - We will put here a request to the user content with our fake JWKS.
 - [`desync3.txt`](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-chunky/desync1.txt) == `GET /user_uuid/.well-known/jwks.json`
     - That is the legitimate URL that we will poison, with the contents of the previous GET
@@ -806,12 +811,22 @@ On the actual challenge server we got:
 
 `SEKAI{tr4nsf3r_3nc0d1ng_ftw!!}`
 
+### Takeaways
+
+Really fun challenge from a subject I was studying the concepts but never took to practice.
+It may get a lot counter-intuitive, but the challenge help me understand this scenario much better.
+
 ## References
 * Team: [FireShell](https://fireshellsecurity.team/)
 * [Team Twitter](https://twitter.com/fireshellst)
 * Follow me too :) [@NeptunianHacks](https://twitter.com/NeptunianHacks)
 * [Hacktricks - RCE with Expression Language](https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection/el-expression-language#rce)
+* [Java Insecure Bean Validation](https://codeql.github.com/codeql-query-help/java/java-insecure-bean-validation/)
 * [WAF](https://www.cloudflare.com/learning/ddos/glossary/web-application-firewall-waf/)
 * [Java Reflection](https://www.baeldung.com/java-reflection)
+* [Request Smuggling](https://portswigger.net/web-security/request-smuggling)
+* [Cache Poisoning](https://portswigger.net/web-security/web-cache-poisoning)
+* [JWKS Spoofing](https://book.hacktricks.xyz/pentesting-web/hacking-jwt-json-web-tokens#jwks-spoofing)
 * [Repo with artifacts discussed here](https://github.com/Neptunians/sekai-ctf-2023-web-writeup)
 * [Team Project Sekai](https://sekai.team/)
+* [SEKAI CTF 2023 - Official Challenges and Solutions](https://github.com/project-sekai-ctf/sekaictf-2023/)
