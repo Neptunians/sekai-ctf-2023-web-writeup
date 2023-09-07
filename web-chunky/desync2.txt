@@ -1,0 +1,8 @@
+11
+title=t&content=c
+0
+
+GET /post/{{USER_ID}}/{{POST_ID}} HTTP/1.1
+Cookie: session={{SESSION}}
+Host: localhost:8080
+
