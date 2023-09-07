@@ -10,9 +10,8 @@ TARGET_PORT = 8080
 
 # Remote
 # http://chunky.chals.sekai.team:8080
-TARGET_HOST = 'localhost'
 # TARGET_HOST = 'chunky.chals.sekai.team'
-TARGET_PORT = 8080
+# TARGET_PORT = 8080
 
 TARGET = f'http://{TARGET_HOST}:{TARGET_PORT}'
 
@@ -36,6 +35,11 @@ def signup(user, pwd):
     }
 
     response = session.post(f'{TARGET}/signup', headers=headers, data=data, allow_redirects=False)
+    if (response.status_code != 302):
+        print(response.status_code)
+        print(response.text)
+        quit()
+
     return response.headers['Location']
 
 def login(user, pwd):
@@ -50,6 +54,12 @@ def login(user, pwd):
     }
 
     response = session.post(f'{TARGET}/login', headers=headers, data=data, allow_redirects=False)
+
+    if (response.status_code != 302):
+        print(response.status_code)
+        print(response.text)
+        quit()
+
     return response.headers['Location']
 
 def create_post(title, content):
@@ -64,6 +74,12 @@ def create_post(title, content):
     }
 
     response = session.post(f'{TARGET}/create_post', headers=headers, data=data, allow_redirects=False)
+
+    if (response.status_code != 302):
+        print(response.status_code)
+        print(response.text)
+        quit()
+
     return response.headers['Location']
 
 def gen_fake_jkws():
